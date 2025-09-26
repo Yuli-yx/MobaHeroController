@@ -4,6 +4,7 @@ from enum import Enum
 from dataclasses import dataclass
 from ..core.base import GameState, Role, Action, ActionType, Position
 from ..strategies.base_strategy import StrategyResult
+from ..pathfinding import PathFinder
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,70 @@ class ActionValidator:
             return False, f"未知的动作类型: {action.action_type}"
 
     @staticmethod
+    def _check_attack_path_obstacles(game_state: GameState, role: Role, target: Role) -> Tuple[bool, str]:
+        """检查攻击路径上是否有障碍物"""
+        try:
+            # 创建寻路器实例
+            from ..pathfinding import PathFinder
+            path_finder = PathFinder(game_state)
+
+            # 获取可能的障碍物位置（塔、水晶、小兵等）
+            obstacles = []
+
+            # 添加塔作为障碍物
+            for tower in game_state.towers:
+                if 'position' in tower:
+                    tower_pos = Position(tower['position']['x'], tower['position']['y'])
+                    obstacles.append(tower_pos)
+
+            # 添加水晶作为障碍物
+            for crystal in game_state.crystals:
+                if 'position' in crystal:
+                    crystal_pos = Position(crystal['position']['x'], crystal['position']['y'])
+                    obstacles.append(crystal_pos)
+
+            # 添加小兵作为障碍物（排除目标本身）
+            for minion in game_state.minions:
+                if 'position' in minion:
+                    minion_pos = Position(minion['position']['x'], minion['position']['y'])
+                    # 排除与目标位置重叠的小兵
+                    if (abs(minion_pos.x - target.position.x) > 1.0 or
+                        abs(minion_pos.y - target.position.y) > 1.0):
+                        obstacles.append(minion_pos)
+
+            # 检查从攻击者到目标是否有直线路径
+            # 使用简化的直线路径检查，采样路径上的几个点
+            distance = role.position.distance_to(target.position)
+            if distance > 0:
+                # 每隔一定距离检查一个点
+                check_interval = min(2.0, distance / 10)  # 最小间隔2.0，最多检查10个点
+                num_checks = max(3, int(distance / check_interval))
+
+                for i in range(1, num_checks):
+                    # 计算检查点的位置
+                    ratio = i / num_checks
+                    check_x = role.position.x + (target.position.x - role.position.x) * ratio
+                    check_y = role.position.y + (target.position.y - role.position.y) * ratio
+                    check_pos = Position(check_x, check_y)
+
+                    # 跳过太接近攻击者或目标的检查点
+                    dist_to_attacker = check_pos.distance_to(role.position)
+                    dist_to_target = check_pos.distance_to(target.position)
+                    if dist_to_attacker < 1.5 or dist_to_target < 1.5:
+                        continue
+
+                    # 检查该位置是否有障碍物（排除攻击者和目标）
+                    if path_finder.is_position_blocked(check_pos, obstacles, role):
+                        return False, f"攻击路径被阻挡 (位置: ({check_x:.1f}, {check_y:.1f}))"
+
+            return True, "攻击路径畅通"
+
+        except Exception as e:
+            # 如果检查过程中出现错误，默认认为路径通畅（避免阻塞所有攻击）
+            logger.warning(f"检查攻击路径障碍物时发生错误: {e}")
+            return True, "路径检查默认通过"
+
+    @staticmethod
     def _validate_attack(game_state: GameState, role: Role, action: Action) -> Tuple[bool, str]:
         """验证攻击动作"""
         if not action.target_id:
@@ -69,6 +134,11 @@ class ActionValidator:
         distance = role.position.distance_to(target.position)
         if distance > role.attack_range:
             return False, f"目标超出攻击范围 (距离: {distance:.1f}, 范围: {role.attack_range})"
+
+        # 检查攻击路径上是否有障碍物
+        path_clear, path_message = ActionValidator._check_attack_path_obstacles(game_state, role, target)
+        if not path_clear:
+            return False, path_message
 
         return True, "验证通过"
 
@@ -104,6 +174,11 @@ class ActionValidator:
         # 检查魔法值（简化处理）
         if role.mana < 20:  # 假设技能需要20魔法值
             return False, "魔法值不足"
+
+        # 检查技能攻击路径上是否有障碍物（技能通常也需要视线）
+        path_clear, path_message = ActionValidator._check_attack_path_obstacles(game_state, role, target)
+        if not path_clear:
+            return False, f"技能{path_message}"
 
         return True, "验证通过"
 
@@ -151,10 +226,11 @@ class ActionValidator:
 class ActionExecutor:
     """动作执行器"""
 
-    def __init__(self):
+    def __init__(self, game_state: GameState):
         self.validator = ActionValidator()
         self.execution_history: List[Tuple[int, str, ActionResult]] = []
         self.skill_cooldowns: Dict[str, Dict[str, int]] = {}  # role_id -> skill_id -> cooldown
+        self.path_finder = PathFinder(game_state)
 
     def execute_action(self, game_state: GameState, role: Role, action: Action,
                       current_turn: int) -> ActionResult:
@@ -235,28 +311,33 @@ class ActionExecutor:
         )
 
     def _execute_move(self, game_state: GameState, role: Role, action: Action) -> ActionResult:
-        """执行移动动作"""
-        # 计算移动距离
-        distance = role.position.distance_to(action.position)
-        max_move_distance = role.move_speed  # 假设移动速度等于每回合可移动距离
+        """执行移动动作，使用A*算法和切比雪夫距离"""
+        # 更新路径查找器的游戏状态
+        self.path_finder.game_state = game_state
 
-        if distance <= max_move_distance:
-            # 可以直接到达目标位置
-            new_position = action.position
-        else:
-            # 部分移动
-            ratio = max_move_distance / distance
-            new_x = role.position.x + (action.position.x - role.position.x) * ratio
-            new_y = role.position.y + (action.position.y - role.position.y) * ratio
-            new_position = Position(new_x, new_y)
+        # 获取在移动距离内的下一个位置
+        max_move_distance = role.move_speed
+        new_position = self.path_finder.get_next_move_position(
+            role, action.position, max_move_distance
+        )
+
+        # 检查是否实际移动了
+        if new_position.distance_to(role.position) < 0.1:
+            return ActionResult(
+                success=True,
+                result_type=ExecutionResult.SUCCESS,
+                message=f"{role.name} 无法移动到目标位置或已在目标位置 (目标:{action.position.x:.1f},{action.position.y:.1f})",
+                actual_action=action
+            )
 
         # 更新角色位置
+        old_position = role.position
         role.position = new_position
 
         return ActionResult(
             success=True,
             result_type=ExecutionResult.SUCCESS,
-            message=f"{role.name} 移动到位置 ({new_position.x:.1f}, {new_position.y:.1f})",
+            message=f"{role.name} 使用A*算法移动到位置 ({new_position.x:.1f}, {new_position.y:.1f})",
             actual_action=action
         )
 
