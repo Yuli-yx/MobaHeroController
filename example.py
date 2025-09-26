@@ -29,7 +29,7 @@ class GameSimulation:
         self.team_coordinator = TeamCoordinator()
         self.role_coordinators: Dict[str, RoleCoordinator] = {}
         self.strategy_manager = StrategyManager()
-        self.action_executor = ActionExecutor()
+        self.action_executor = None
         self.action_optimizer = ActionOptimizer()
         self.current_turn = 0
 
@@ -268,6 +268,9 @@ class GameSimulation:
         logger.info(f"游戏初始化完成，地图大小: {self.game_state.map_width}x{self.game_state.map_height}")
         logger.info(f"我方角色: {list(self.game_state.roles.keys())}")
         logger.info(f"敌方角色: {list(self.game_state.enemies.keys())}")
+
+        # 初始化动作执行器
+        self.action_executor = ActionExecutor(self.game_state)
 
         # 运行指定回合数
         for turn in range(turns):
