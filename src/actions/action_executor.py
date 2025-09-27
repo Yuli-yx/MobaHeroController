@@ -236,17 +236,15 @@ class ActionValidator:
         if action.skill_id not in role.skills:
             return False, f"角色没有技能 {action.skill_id}"
 
-        # 检查魔法值（根据技能类型不同而不同）
-        if hasattr(role, 'mana'):
-            # 法师治疗技能需要30魔法值
-            if action.skill_id == "heal" and role.mana < 30:
-                return False, "魔法值不足"
-            # 猴子跳跃技能需要35魔法值
-            elif action.skill_id == "leap" and role.mana < 35:
-                return False, "魔法值不足"
-            # 法师范围控制技能需要50魔法值
-            elif action.skill_id == "area_control" and role.mana < 50:
-                return False, "魔法值不足"
+        # 检查是否可以使用技能（钻石和冷却）
+        if not role.can_use_skill(action.skill_id):
+            # 检查具体原因
+            if role.get_skill_cooldown(action.skill_id) > 0:
+                return False, f"技能冷却中，剩余 {role.get_skill_cooldown(action.skill_id)} 回合"
+            elif role.diamonds < 5:
+                return False, "钻石不足，需要5钻石"
+            else:
+                return False, "技能无法使用"
 
         return True, "验证通过"
 
@@ -375,51 +373,24 @@ class ActionExecutor:
         """执行技能攻击"""
         target = game_state.enemies[action.target_id]
 
-        # 检查是否是英雄类，使用英雄技能系统
-        if hasattr(role, 'use_skill'):
-            success = role.use_skill(action.skill_id, game_state, target)
-            if success:
-                return ActionResult(
-                    success=True,
-                    result_type=ExecutionResult.SUCCESS,
-                    message=f"{role.name} 使用技能 {action.skill_id} 攻击 {target.name}",
-                    actual_action=action
-                )
-            else:
-                return ActionResult(
-                    success=False,
-                    result_type=ExecutionResult.FAILED,
-                    message=f"{role.name} 使用技能 {action.skill_id} 失败",
-                    actual_action=action
-                )
+        # 使用技能系统
+        from ..skills import SkillSystem
+        success, message = SkillSystem.use_skill(role, action.skill_id, game_state, target=target)
 
-        # 默认技能攻击逻辑
-        # 计算技能伤害（通常是普通攻击的1.5-3倍）
-        skill_damage_multiplier = 2.0
-        base_damage = role.attack_damage * skill_damage_multiplier
-        actual_damage = base_damage * (1 - target.defense * 0.01)
-
-        # 消耗魔法值
-        mana_cost = 20
-        role.mana = max(0, role.mana - mana_cost)
-
-        # 更新目标血量
-        target.health = max(0, target.health - actual_damage)
-        if target.health == 0:
-            target.is_alive = False
-
-        # 设置技能冷却
-        self._set_skill_cooldown(role.id, action.skill_id, 3)
-
-        return ActionResult(
-            success=True,
-            result_type=ExecutionResult.SUCCESS,
-            message=f"{role.name} 使用技能 {action.skill_id} 攻击 {target.name}, 造成 {actual_damage:.1f} 点伤害",
-            actual_action=action,
-            damage_dealt=actual_damage,
-            mana_cost=mana_cost,
-            cooldown_remaining=3
-        )
+        if success:
+            return ActionResult(
+                success=True,
+                result_type=ExecutionResult.SUCCESS,
+                message=message,
+                actual_action=action
+            )
+        else:
+            return ActionResult(
+                success=False,
+                result_type=ExecutionResult.FAILED,
+                message=message,
+                actual_action=action
+            )
 
     def _execute_skill_support(self, game_state: GameState, role: Role, action: Action) -> ActionResult:
         """执行辅助技能"""
@@ -482,31 +453,24 @@ class ActionExecutor:
 
     def _execute_skill_position(self, game_state: GameState, role: Role, action: Action) -> ActionResult:
         """执行位置技能"""
-        # 检查是否是英雄类，使用英雄技能系统
-        if hasattr(role, 'use_skill'):
-            success = role.use_skill(action.skill_id, game_state, position=action.position)
-            if success:
-                return ActionResult(
-                    success=True,
-                    result_type=ExecutionResult.SUCCESS,
-                    message=f"{role.name} 使用技能 {action.skill_id} 在位置 ({action.position.x:.1f}, {action.position.y:.1f})",
-                    actual_action=action
-                )
-            else:
-                return ActionResult(
-                    success=False,
-                    result_type=ExecutionResult.FAILED,
-                    message=f"{role.name} 使用技能 {action.skill_id} 失败",
-                    actual_action=action
-                )
+        # 使用技能系统
+        from ..skills import SkillSystem
+        success, message = SkillSystem.use_skill(role, action.skill_id, game_state, position=action.position)
 
-        # 默认位置技能逻辑
-        return ActionResult(
-            success=False,
-            result_type=ExecutionResult.FAILED,
-            message=f"不支持的位置技能 {action.skill_id}",
-            actual_action=action
-        )
+        if success:
+            return ActionResult(
+                success=True,
+                result_type=ExecutionResult.SUCCESS,
+                message=message,
+                actual_action=action
+            )
+        else:
+            return ActionResult(
+                success=False,
+                result_type=ExecutionResult.FAILED,
+                message=message,
+                actual_action=action
+            )
 
     def _check_skill_cooldown(self, role: Role, skill_id: str) -> Optional[str]:
         """检查技能冷却"""

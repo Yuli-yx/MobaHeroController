@@ -55,6 +55,18 @@ class Role:
     attack_range: float
     skills: List[str]
     is_alive: bool = True
+    # 英雄特有属性
+    hero_type: str = "normal"  # "mage", "warrior", "monkey", "normal"
+    vision_range: float = 4.0
+    diamonds: int = 100  # 钻石数量
+    skill_cooldowns: Dict[str, int] = None
+    buffs: List[Dict[str, Any]] = None
+
+    def __post_init__(self):
+        if self.skill_cooldowns is None:
+            self.skill_cooldowns = {}
+        if self.buffs is None:
+            self.buffs = []
 
     @property
     def health_percentage(self) -> float:
@@ -63,6 +75,80 @@ class Role:
     @property
     def mana_percentage(self) -> float:
         return self.mana / self.max_mana if self.max_mana > 0 else 0
+
+    def get_skill_cooldown(self, skill_id: str) -> int:
+        """获取技能冷却时间"""
+        return self.skill_cooldowns.get(skill_id, 0)
+
+    def set_skill_cooldown(self, skill_id: str, cooldown: int = 10) -> None:
+        """设置技能冷却时间（所有英雄CD都是10）"""
+        self.skill_cooldowns[skill_id] = cooldown
+
+    def update_cooldowns(self) -> None:
+        """更新所有技能冷却"""
+        for skill_id in list(self.skill_cooldowns.keys()):
+            if self.skill_cooldowns[skill_id] > 0:
+                self.skill_cooldowns[skill_id] -= 1
+
+    def can_use_skill(self, skill_id: str) -> bool:
+        """检查是否可以使用技能"""
+        # 检查冷却
+        if self.get_skill_cooldown(skill_id) > 0:
+            return False
+
+        # 检查钻石（所有技能消耗5钻石）
+        if self.diamonds < 5:
+            return False
+
+        # 检查是否被沉默
+        for buff in self.buffs:
+            if buff.get('effect_type') == 'silence':
+                return False
+
+        return True
+
+    def use_diamonds(self, amount: int) -> bool:
+        """消耗钻石"""
+        if self.diamonds >= amount:
+            self.diamonds -= amount
+            return True
+        return False
+
+    def add_buff(self, buff_data: Dict[str, Any]) -> None:
+        """添加增益/减益效果"""
+        self.buffs.append(buff_data)
+
+    def remove_buff(self, buff_name: str) -> None:
+        """移除指定buff"""
+        self.buffs = [buff for buff in self.buffs if buff.get('name') != buff_name]
+
+    def update_buffs(self) -> None:
+        """更新buff状态"""
+        # 减少所有buff的持续时间
+        for buff in self.buffs[:]:
+            if 'duration' in buff:
+                buff['duration'] -= 1
+                if buff['duration'] <= 0:
+                    self.buffs.remove(buff)
+
+    def get_damage_multiplier(self) -> float:
+        """获取伤害倍率"""
+        multiplier = 1.0
+        for buff in self.buffs:
+            if buff.get('effect_type') == 'damage_reduction':
+                multiplier *= (1 - buff.get('value', 0))
+        return multiplier
+
+    def can_move(self) -> bool:
+        """检查是否可以移动"""
+        for buff in self.buffs:
+            if buff.get('effect_type') == 'immobilize':
+                return False
+        return True
+
+    def is_in_vision_range(self, target_position: Position) -> bool:
+        """检查目标位置是否在视野范围内"""
+        return self.position.distance_to(target_position) <= self.vision_range
 
 
 @dataclass
@@ -75,10 +161,11 @@ class GameState:
     current_turn: int
     map_width: float
     map_height: float
-    # 新增字段
-    game_map: Optional[Any] = None  # 游戏地图对象
-    vision_map: Optional[Dict[str, Any]] = None  # 视野地图
-    structure_effects: Optional[Dict[str, Any]] = None  # 建筑效果
+    # 游戏地图信息（实时更新）
+    game_map: Optional[Dict[str, Any]] = None  # 实时地图信息
+    lane_info: Optional[Dict[str, Any]] = None  # 分路信息
+    structure_status: Optional[Dict[str, Any]] = None  # 建筑状态
+    minion_waves: Optional[List[Dict[str, Any]]] = None  # 小兵波次信息
 
     def get_team_health_percentage(self) -> float:
         if not self.roles:
