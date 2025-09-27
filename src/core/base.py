@@ -10,6 +10,7 @@ class ActionType(Enum):
     SKILL_ATTACK = "skill_attack"
     SKILL_SUPPORT = "skill_support"
     SKILL_MOVE = "skill_move"
+    SKILL_POSITION = "skill_position"  # 位置技能（指定位置释放）
     DEFEND = "defend"
     HEAL = "heal"
     RETREAT = "retreat"
@@ -74,6 +75,10 @@ class GameState:
     current_turn: int
     map_width: float
     map_height: float
+    # 新增字段
+    game_map: Optional[Any] = None  # 游戏地图对象
+    vision_map: Optional[Dict[str, Any]] = None  # 视野地图
+    structure_effects: Optional[Dict[str, Any]] = None  # 建筑效果
 
     def get_team_health_percentage(self) -> float:
         if not self.roles:
@@ -86,6 +91,111 @@ class GameState:
             return 0.0
         total_health = sum(enemy.health_percentage for enemy in self.enemies.values())
         return total_health / len(self.enemies)
+
+    def get_visible_enemies(self, role_id: str) -> Dict[str, Role]:
+        """获取指定角色可见的敌方单位"""
+        if role_id not in self.roles:
+            return {}
+
+        role = self.roles[role_id]
+        visible_enemies = {}
+
+        # 检查每个敌人是否在视野范围内
+        for enemy_id, enemy in self.enemies.items():
+            if hasattr(role, 'is_in_vision_range'):
+                if role.is_in_vision_range(enemy.position):
+                    visible_enemies[enemy_id] = enemy
+            else:
+                # 对于普通角色，使用基础视野范围
+                vision_range = 4.0
+                if role.position.distance_to(enemy.position) <= vision_range:
+                    visible_enemies[enemy_id] = enemy
+
+        return visible_enemies
+
+    def get_visible_structures(self, role_id: str) -> List[Dict[str, Any]]:
+        """获取指定角色可见的建筑"""
+        if role_id not in self.roles:
+            return []
+
+        role = self.roles[role_id]
+        visible_structures = []
+
+        vision_range = getattr(role, 'vision_range', 4.0)
+
+        # 检查防御塔
+        for tower in self.towers:
+            if 'position' in tower:
+                tower_pos = Position(tower['position']['x'], tower['position']['y'])
+                if role.position.distance_to(tower_pos) <= vision_range:
+                    visible_structures.append(tower)
+
+        # 检查水晶
+        for crystal in self.crystals:
+            if 'position' in crystal:
+                crystal_pos = Position(crystal['position']['x'], crystal['position']['y'])
+                if role.position.distance_to(crystal_pos) <= vision_range:
+                    visible_structures.append(crystal)
+
+        return visible_structures
+
+    def get_minions_in_range(self, center: Position, range: float) -> List[Dict[str, Any]]:
+        """获取指定范围内的所有小兵"""
+        minions_in_range = []
+
+        for minion in self.minions:
+            if 'position' in minion:
+                minion_pos = Position(minion['position']['x'], minion['position']['y'])
+                if center.distance_to(minion_pos) <= range:
+                    minions_in_range.append(minion)
+
+        return minions_in_range
+
+    def process_minion_kill(self, killer_id: str, minion: Dict[str, Any]) -> None:
+        """处理小兵击杀"""
+        if killer_id in self.roles:
+            killer = self.roles[killer_id]
+            if hasattr(killer, 'heal_minion_kill'):
+                killer.heal_minion_kill()
+
+        # 从游戏中移除小兵
+        if minion in self.minions:
+            self.minions.remove(minion)
+
+    def update_all_heroes(self) -> None:
+        """更新所有英雄状态（buff、冷却等）"""
+        # 更新我方英雄
+        for role in self.roles.values():
+            if hasattr(role, 'update_buffs'):
+                role.update_buffs()
+            if hasattr(role, 'update_cooldowns'):
+                role.update_cooldowns()
+
+        # 更新敌方英雄
+        for enemy in self.enemies.values():
+            if hasattr(enemy, 'update_buffs'):
+                enemy.update_buffs()
+            if hasattr(enemy, 'update_cooldowns'):
+                enemy.update_cooldowns()
+
+    def process_dot_effects(self) -> None:
+        """处理持续伤害效果"""
+        all_units = list(self.roles.values()) + list(self.enemies.values())
+
+        for unit in all_units:
+            if hasattr(unit, 'buffs'):
+                damage_to_apply = 0
+                buffs_to_remove = []
+
+                for buff in unit.buffs:
+                    if buff.effect_type == "dot":
+                        damage_to_apply += buff.value
+
+                # 应用伤害
+                if damage_to_apply > 0:
+                    unit.health = max(0, unit.health - damage_to_apply)
+                    if unit.health == 0:
+                        unit.is_alive = False
 
 
 class State(ABC):

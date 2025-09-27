@@ -51,6 +51,8 @@ class ActionValidator:
             return ActionValidator._validate_skill_support(game_state, role, action)
         elif action.action_type == ActionType.SKILL_MOVE:
             return ActionValidator._validate_skill_move(game_state, role, action)
+        elif action.action_type == ActionType.SKILL_POSITION:
+            return ActionValidator._validate_skill_position(game_state, role, action)
         else:
             return False, f"未知的动作类型: {action.action_type}"
 
@@ -222,6 +224,32 @@ class ActionValidator:
 
         return True, "验证通过"
 
+    @staticmethod
+    def _validate_skill_position(game_state: GameState, role: Role, action: Action) -> Tuple[bool, str]:
+        """验证位置技能动作"""
+        if not action.position:
+            return False, "位置技能需要目标位置"
+
+        if not action.skill_id:
+            return False, "位置技能需要技能ID"
+
+        if action.skill_id not in role.skills:
+            return False, f"角色没有技能 {action.skill_id}"
+
+        # 检查魔法值（根据技能类型不同而不同）
+        if hasattr(role, 'mana'):
+            # 法师治疗技能需要30魔法值
+            if action.skill_id == "heal" and role.mana < 30:
+                return False, "魔法值不足"
+            # 猴子跳跃技能需要35魔法值
+            elif action.skill_id == "leap" and role.mana < 35:
+                return False, "魔法值不足"
+            # 法师范围控制技能需要50魔法值
+            elif action.skill_id == "area_control" and role.mana < 50:
+                return False, "魔法值不足"
+
+        return True, "验证通过"
+
 
 class ActionExecutor:
     """动作执行器"""
@@ -271,6 +299,8 @@ class ActionExecutor:
                 result = self._execute_skill_support(game_state, role, action)
             elif action.action_type == ActionType.SKILL_MOVE:
                 result = self._execute_skill_move(game_state, role, action)
+            elif action.action_type == ActionType.SKILL_POSITION:
+                result = self._execute_skill_position(game_state, role, action)
             else:
                 result = ActionResult(
                     success=False,
@@ -345,6 +375,25 @@ class ActionExecutor:
         """执行技能攻击"""
         target = game_state.enemies[action.target_id]
 
+        # 检查是否是英雄类，使用英雄技能系统
+        if hasattr(role, 'use_skill'):
+            success = role.use_skill(action.skill_id, game_state, target)
+            if success:
+                return ActionResult(
+                    success=True,
+                    result_type=ExecutionResult.SUCCESS,
+                    message=f"{role.name} 使用技能 {action.skill_id} 攻击 {target.name}",
+                    actual_action=action
+                )
+            else:
+                return ActionResult(
+                    success=False,
+                    result_type=ExecutionResult.FAILED,
+                    message=f"{role.name} 使用技能 {action.skill_id} 失败",
+                    actual_action=action
+                )
+
+        # 默认技能攻击逻辑
         # 计算技能伤害（通常是普通攻击的1.5-3倍）
         skill_damage_multiplier = 2.0
         base_damage = role.attack_damage * skill_damage_multiplier
@@ -429,6 +478,34 @@ class ActionExecutor:
             actual_action=action,
             mana_cost=mana_cost,
             cooldown_remaining=4
+        )
+
+    def _execute_skill_position(self, game_state: GameState, role: Role, action: Action) -> ActionResult:
+        """执行位置技能"""
+        # 检查是否是英雄类，使用英雄技能系统
+        if hasattr(role, 'use_skill'):
+            success = role.use_skill(action.skill_id, game_state, position=action.position)
+            if success:
+                return ActionResult(
+                    success=True,
+                    result_type=ExecutionResult.SUCCESS,
+                    message=f"{role.name} 使用技能 {action.skill_id} 在位置 ({action.position.x:.1f}, {action.position.y:.1f})",
+                    actual_action=action
+                )
+            else:
+                return ActionResult(
+                    success=False,
+                    result_type=ExecutionResult.FAILED,
+                    message=f"{role.name} 使用技能 {action.skill_id} 失败",
+                    actual_action=action
+                )
+
+        # 默认位置技能逻辑
+        return ActionResult(
+            success=False,
+            result_type=ExecutionResult.FAILED,
+            message=f"不支持的位置技能 {action.skill_id}",
+            actual_action=action
         )
 
     def _check_skill_cooldown(self, role: Role, skill_id: str) -> Optional[str]:
