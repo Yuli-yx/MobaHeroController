@@ -61,6 +61,9 @@ class Role:
     diamonds: int = 100  # 钻石数量
     skill_cooldowns: Dict[str, int] = None
     buffs: List[Dict[str, Any]] = None
+    # 技能冷却属性（兼容性）
+    skill1_cooldown: int = 0
+    skill2_cooldown: int = 0
 
     def __post_init__(self):
         if self.skill_cooldowns is None:
@@ -83,12 +86,22 @@ class Role:
     def set_skill_cooldown(self, skill_id: str, cooldown: int = 10) -> None:
         """设置技能冷却时间（所有英雄CD都是10）"""
         self.skill_cooldowns[skill_id] = cooldown
+        # 同步到兼容性属性
+        if len(self.skills) >= 1 and skill_id == self.skills[0]:
+            self.skill1_cooldown = cooldown
+        elif len(self.skills) >= 2 and skill_id == self.skills[1]:
+            self.skill2_cooldown = cooldown
 
     def update_cooldowns(self) -> None:
         """更新所有技能冷却"""
         for skill_id in list(self.skill_cooldowns.keys()):
             if self.skill_cooldowns[skill_id] > 0:
                 self.skill_cooldowns[skill_id] -= 1
+                # 同步到兼容性属性
+                if len(self.skills) >= 1 and skill_id == self.skills[0]:
+                    self.skill1_cooldown = self.skill_cooldowns[skill_id]
+                elif len(self.skills) >= 2 and skill_id == self.skills[1]:
+                    self.skill2_cooldown = self.skill_cooldowns[skill_id]
 
     def can_use_skill(self, skill_id: str) -> bool:
         """检查是否可以使用技能"""
@@ -166,6 +179,9 @@ class GameState:
     lane_info: Optional[Dict[str, Any]] = None  # 分路信息
     structure_status: Optional[Dict[str, Any]] = None  # 建筑状态
     minion_waves: Optional[List[Dict[str, Any]]] = None  # 小兵波次信息
+    # 队伍和资源信息
+    team_side: str = "defender"  # "defender" or "challenger"
+    diamonds_num: int = 1000  # 团队钻石总数
 
     def get_team_health_percentage(self) -> float:
         if not self.roles:
